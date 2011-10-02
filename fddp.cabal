@@ -1,0 +1,11 @@
+name:              fddp
+version:           0.0.1
+author:            Nikita Timofeev
+build-type:        Simple
+category:          Console
+cabal-version:     >= 1.8
+
+executable fddp
+    main-is:       Main.hs
+    ghc-options:   -Wall -rtsopts -fllvm
+    build-depends: base, transformers, directory, filepath, enumerator
