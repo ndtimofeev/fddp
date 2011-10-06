@@ -1,40 +1,27 @@
 module Main where
 
+import Exceptions (Exception(..))
+import FileCompare
+    ( CompareReport(..)
+    , Equal(..)
+    , FileData(..)
+    , compareFile
+    , equalContent
+    , equalSize
+    , identicalPath
+    , identicalCPath )
+
 -- base
 import Control.Monad (unless)
 import Data.Maybe (fromMaybe)
 import System.Environment (getArgs)
-import System.IO (IOMode(..), hFileSize, withBinaryFile)
 
 -- directory
-import System.Directory (doesFileExist, canonicalizePath)
-
--- enumerator
-import Data.Enumerator (($$), run_)
-import Data.Enumerator.Binary (enumFile, consume)
+import System.Directory (doesFileExist)
 
 -- transformers
-import Control.Monad.Trans.Error (ErrorT(..), Error(..), throwError)
+import Control.Monad.Trans.Error (ErrorT(..), throwError)
 import Control.Monad.Trans.Class (lift)
-
-data FileData = FileData
-    { maybeSize      :: Maybe Integer
-    , maybeCanonical :: Maybe FilePath
-    , pathToFile     :: FilePath
-    } deriving (Show, Eq, Ord)
-
-data Exception = BadKey String | BadFile String | Exception String deriving Show
-
-data Equal = Equal | Unequal | Identical deriving Show
-
-data CompareReport = CompareReport 
-    { equal   :: Equal
-    , newOrig :: Maybe FileData
-    , newNext :: Maybe FileData
-    } deriving Show
-
-instance Error Exception where
-    strMsg = Exception
 
 main :: IO (Either Exception ())
 main = runErrorT $ do
@@ -54,69 +41,30 @@ process :: [FileData] -> ErrorT Exception IO ()
 process files = case files of
     (x:xs) -> do
         lift $ putStrLn $ pathToFile x
-        ufiles <- lift $ fileFilter x xs
+        ufiles <- fileFilter x xs
         process ufiles
     []     -> return ()
 
-fileFilter :: FileData -> [FileData] -> IO [FileData]
-fileFilter file files = case files of
+fileFilter :: FileData -> [FileData] -> ErrorT Exception IO [FileData]
+fileFilter file files = {- fileFilterRec file files [] -} case files of
     (x:xs) -> do
-        ret <- compareFile file x
-        case ret of
-            CompareReport Identical _ _    -> error "Кровь, кишки, слёзы"
-            CompareReport Equal nfile _    -> fileFilter (fromMaybe file nfile) xs
-            CompareReport Unequal nfile nx -> do
+        (CompareReport val nfile nx) <- compareFile file x $
+            \y -> identicalPath y >>= identicalCPath >>= equalSize >>= equalContent
+        case val of
+            Identical -> fileFilter (fromMaybe file nfile) xs
+            Equal     -> fileFilter (fromMaybe file nfile) xs
+            Unequal   -> do
                 list <- fileFilter (fromMaybe file nfile) xs
                 return (fromMaybe x nx:list)
     []     -> return []
-
-updateCanonical :: FileData -> IO FileData
-updateCanonical fileData = case maybeCanonical fileData of
-    Just _   -> return fileData
-    Nothing  -> do
-        path <- canonicalizePath $ pathToFile fileData
-        return $ fileData { maybeCanonical = Just path }
-
-updateSize :: FileData -> IO FileData
-updateSize fileData = case maybeSize fileData of
-    Just _  -> return fileData
-    Nothing -> do
-        len <- withBinaryFile (pathToFile fileData) ReadMode hFileSize
-        return $ fileData { maybeSize = Just len }
-
-compareFile :: FileData -> FileData -> IO CompareReport
-compareFile orig next = if pathToFile orig == pathToFile next
-    then return $ CompareReport Identical Nothing Nothing
-    else do
-        c_orig <- updateCanonical orig
-        c_next <- updateCanonical next
-        if maybeCanonical c_orig == maybeCanonical c_next
-            then return CompareReport
-                { equal   = Identical
-                , newOrig = diffDataFile orig c_orig
-                , newNext = diffDataFile next c_next }
-            else do
-                s_orig <- updateSize c_orig
-                s_next <- updateSize c_next
-                if maybeSize s_orig /= maybeSize s_next
-                    then return CompareReport
-                        { equal   = Unequal
-                        , newOrig = diffDataFile orig s_orig
-                        , newNext = diffDataFile next s_next }
-                    else do
-                        origFile <- run_ $ enumFile (pathToFile s_orig) $$ consume
-                        nextFile <- run_ $ enumFile (pathToFile s_next) $$ consume
-                        if origFile == nextFile
-                            then return CompareReport
-                                { equal   = Equal
-                                , newOrig = diffDataFile orig s_orig
-                                , newNext = diffDataFile next s_next }
-                            else return CompareReport
-                                { equal   = Unequal
-                                , newOrig = diffDataFile orig s_orig
-                                , newNext = diffDataFile next s_next }
-
-diffDataFile :: FileData -> FileData -> Maybe FileData
-diffDataFile orig next = if orig == next
-    then Nothing
-    else Just next
+    where
+        fileFilterRec :: FileData -> [FileData] -> [FileData] -> ErrorT Exception IO [FileData]
+        fileFilterRec l_file l_files acc = case l_files of
+            (x:xs) -> do
+                CompareReport val nfile nx <- compareFile l_file x $
+                    \y -> identicalPath y >>= identicalCPath >>= equalSize >>= equalContent
+                case val of
+                    Identical  -> fileFilterRec (fromMaybe l_file nfile) xs acc
+                    Equal      -> fileFilterRec (fromMaybe l_file nfile) xs acc
+                    Unequal    -> fileFilterRec (fromMaybe l_file nfile) xs (acc ++ [fromMaybe x nx])
+            []     -> return acc
