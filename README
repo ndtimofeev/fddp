@@ -1,3 +1,0 @@
-fddp is simple shell tool that finds files with equal content in a given set of
-files. This is useful for finding duplicates in a set of documents where the
-same document might have been stored by accident with different names.
